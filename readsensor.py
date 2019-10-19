@@ -12,7 +12,7 @@ class SensorWorker(threading.Thread):
     Thread that reads the sensor
     '''
 
-    def __init__(self, device, delay, logger):
+    def __init__(self, device, delay, failures, logger):
         super().__init__()
         self.killed = False
         self.device = device
@@ -20,9 +20,10 @@ class SensorWorker(threading.Thread):
         self.logger = logger
         # Counter for number of failed attampts in a row
         self.failed = 0
+        self.max_failures = failures
 
     def run(self):
-        self.logger.info('Thread for device {} and delay {} started'.format(self.device, self.delay))
+        self.logger.info('Thread started for device={}, delay={}, failures={}'.format(self.device, self.delay, self.max_failures))
         try:
             gatt = pexpect.spawn("gatttool -b " + self.device+ " -I")
             gatt.sendline("connect")
@@ -44,9 +45,9 @@ class SensorWorker(threading.Thread):
                 self.logger.info('Device={} Temperature={} Humidity={}'.format(self.device, temp, humidity))
                 self.failed = 0
             except pexpect.exceptions.TIMEOUT:
-                self.logger.info('Could not read from device {}'.format(self.device))
                 self.failed += 1
-                if self.failed > 5:
+                self.logger.info('Could not read from device {}, consecutive failures={}'.format(self.device, self.failed))
+                if self.failed >= self.max_failures:
                     self.logger.error('Too many read failures in a row for device {}, exiting'.format(self.device))
                     self.killed = True
             except Exception as e:
@@ -57,7 +58,6 @@ class SensorWorker(threading.Thread):
         self.logger.info('Stop message received, stopping thread for device {}'.format(self.device))
 
 
-
 def main():
 
     readers = []
@@ -66,6 +66,7 @@ def main():
     parser = argparse.ArgumentParser(description='BTLE JINOU Sensor Reader')
     parser.add_argument('devices', nargs='+', help='List of devices to read from by MAC Address')
     parser.add_argument('--delay', type=int, help='Delay in seconds between reads, default 60', default=60)
+    parser.add_argument('--failures', type=int, help='Give up on sensor afer X consecutive failures, default 5', default=5)
     parser.add_argument('--logfile', help='Name of logfile for output log, "stdout" for stdout (default), or "syslog" for syslog', default='stdout')
     parser.add_argument('--loglevel', choices=['CRITICAL','WARNING','ERROR','INFO','DEBUG'], help='Log level to log, default is INFO', default='INFO')
     args = parser.parse_args()
@@ -93,7 +94,7 @@ def main():
     # Create threads for reading devices
     for device in args.devices:
         logger.info('Starting up thread for device {}'.format(device))
-        reader = SensorWorker(device, args.delay, logger)
+        reader = SensorWorker(device, args.delay, args.failures, logger)
         readers.append(reader)
         reader.setDaemon(True)
         reader.start()
